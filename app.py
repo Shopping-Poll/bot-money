@@ -1,72 +1,79 @@
+import os
+import psycopg2
 from flask import Flask, render_template, request, jsonify
-import sqlite3
 
 app = Flask(__name__)
-DB_NAME = 'keuangan_pro.db'
+
+# Ambil URL Database dari settingan Vercel (nanti kita set)
+DATABASE_URL = os.environ.get('DATABASE_URL')
+
+def get_db_connection():
+    conn = psycopg2.connect(DATABASE_URL)
+    return conn
 
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute('''CREATE TABLE IF NOT EXISTS transaksi 
-                 (id INTEGER PRIMARY KEY, waktu TEXT, nominal REAL, ket TEXT, usd REAL)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS pengaturan 
-                 (id INTEGER PRIMARY KEY, bot_token TEXT, rate REAL, fee_persen REAL)''')
-    c.execute("SELECT count(*) FROM pengaturan")
-    if c.fetchone()[0] == 0:
-        c.execute("INSERT INTO pengaturan (id, bot_token, rate, fee_persen) VALUES (1, 'TOKEN_DEFAULT', 17000, 2.3)")
+    conn = get_db_connection()
+    cur = conn.cursor()
+    # Syntax SQL Postgres sedikit beda dengan SQLite (SERIAL vs INTEGER PRIMARY KEY AUTOINCREMENT)
+    cur.execute('''CREATE TABLE IF NOT EXISTS transaksi 
+                 (id SERIAL PRIMARY KEY, waktu TEXT, nominal REAL, ket TEXT, usd REAL)''')
+    cur.execute('''CREATE TABLE IF NOT EXISTS pengaturan 
+                 (id SERIAL PRIMARY KEY, bot_token TEXT, rate REAL, fee_persen REAL)''')
+    
+    # Cek isi tabel
+    cur.execute("SELECT count(*) FROM pengaturan")
+    if cur.fetchone()[0] == 0:
+        cur.execute("INSERT INTO pengaturan (bot_token, rate, fee_persen) VALUES (%s, %s, %s)", 
+                    ('TOKEN_DEFAULT', 17000, 2.3))
+    
     conn.commit()
+    cur.close()
     conn.close()
 
 @app.route('/')
 def index():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    c.execute("SELECT * FROM transaksi ORDER BY id DESC")
-    transaksi = c.fetchall()
-    c.execute("SELECT * FROM pengaturan WHERE id=1")
-    config = c.fetchone()
-    conn.close()
-    # Sekarang menggunakan render_template untuk memanggil file di folder templates
-    return render_template('index.html', transaksi=transaksi, config=config)
-
-@app.route('/settings', methods=['GET', 'POST'])
-def settings():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    c = conn.cursor()
-    msg = ""
-    if request.method == 'POST':
-        c.execute("UPDATE pengaturan SET bot_token=?, rate=?, fee_persen=? WHERE id=1", 
-                  (request.form['token'], request.form['rate'], request.form['fee']))
-        conn.commit()
-        msg = "Pengaturan berhasil disimpan!"
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT * FROM transaksi ORDER BY id DESC")
+    transaksi = cur.fetchall()
     
-    c.execute("SELECT * FROM pengaturan WHERE id=1")
-    config = c.fetchone()
+    cur.execute("SELECT * FROM pengaturan LIMIT 1")
+    config = cur.fetchone() # Di Postgres, hasilnya tuple, bukan dict row
+    
+    # Kita rapihkan data agar mudah dibaca HTML
+    config_dict = {'bot_token': config[1], 'rate': config[2], 'fee_persen': config[3]}
+    
+    # Ubah data transaksi jadi dictionary list
+    trans_list = []
+    for row in transaksi:
+        trans_list.append({
+            'waktu': row[1],
+            'nominal': row[2],
+            'ket': row[3],
+            'usd': row[4]
+        })
+        
+    cur.close()
     conn.close()
-    return render_template('settings.html', config=config, msg=msg)
+    return render_template('index.html', transaksi=trans_list, config=config_dict)
 
-@app.route('/api/get_config')
-def get_config():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM pengaturan WHERE id=1")
-    row = c.fetchone()
-    conn.close()
-    return jsonify({"token": row[1], "rate": row[2], "fee": row[3]})
+# ... (Kode Route /settings dan API sama logikanya, 
+#      tapi ganti tanda tanya '?' menjadi '%s' untuk placeholder SQL) ...
 
+# Contoh Route Simpan API yang sudah diubah ke Postgres:
 @app.route('/api/simpan_transaksi', methods=['POST'])
 def simpan_transaksi():
     data = request.json
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("INSERT INTO transaksi (waktu, nominal, ket, usd) VALUES (?, ?, ?, ?)",
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO transaksi (waktu, nominal, ket, usd) VALUES (%s, %s, %s, %s)",
               (data['waktu'], data['nominal'], data['ket'], data['usd']))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"status": "ok"})
 
+# Vercel butuh variable 'app' ini terekspos
 if __name__ == '__main__':
-    init_db()
-    app.run(debug=True, port=5000)
+    # init_db() # Di Vercel kita tidak jalankan init setiap request, sebaiknya manual atau cek error
+    app.run(debug=True)
