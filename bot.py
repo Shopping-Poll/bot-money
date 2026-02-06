@@ -3,7 +3,7 @@ import requests
 from datetime import datetime
 import time
 
-API_URL = "http://127.0.0.1:5000/api"
+API_URL = "https://bot-money.vercel.app"
 
 def get_settings():
     try:
@@ -52,5 +52,6 @@ def catat_masuk(message):
 
     except Exception as e:
         bot.reply_to(message, f"Error: {e}")
+
 
 bot.infinity_polling()
